@@ -32,6 +32,8 @@ import argparse
 import logging
 import sys
 
+import pandas as pd
+
 from config.settings import HOLDOUT_DAYS, HOSTS, N_LAGS_DEFAULT, N_FORECASTS
 from pipeline import ServerMetricsForecaster, describe_dataset, load_and_preprocess
 
@@ -151,10 +153,10 @@ def _add_nlags_arg(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--n-lags",
         type=int,
-        default=N_LAGS_DEFAULT,
+        default=None,
         choices=[7, 14],
         metavar="N",
-        help=f"AR lookback: 7 (1-week) or 14 (2-week) — default: {N_LAGS_DEFAULT}",
+        help="AR lookback: 7 or 14 (default: auto-resolves per-metric optimal lookbacks)",
     )
 
 
@@ -197,11 +199,27 @@ def cmd_fit(args: argparse.Namespace) -> None:
 
 def cmd_predict(args: argparse.Namespace) -> None:
     """Load saved models and generate forecast charts."""
+    from pipeline.visualization import extract_forecast_rows
+
     forecaster = ServerMetricsForecaster(n_lags=args.n_lags, n_forecasts=N_FORECASTS)
     forecaster.load_and_preprocess()
 
-    print(f"\n📈  Predicting: {args.host}  |  n_lags={args.n_lags}")
-    forecaster.predict(host_name=args.host, n_lags=args.n_lags, save_charts=True)
+    print(f"\n📈  Predicting: {args.host}  |  n_lags={args.n_lags or 'auto'}")
+    forecasts = forecaster.predict(host_name=args.host, n_lags=args.n_lags, save_charts=True)
+
+    print(f"\n📋  30-Day Forecast Table (with 90% Confidence Intervals):\n")
+    for metric, f_df in forecasts.items():
+        clean_df = extract_forecast_rows(f_df)
+        if clean_df is not None:
+            print(f"--- {args.host} | {metric} ---")
+            for idx, row in clean_df.iterrows():
+                ds_str = pd.to_datetime(row['ds']).strftime('%Y-%m-%d')
+                yhat_str = f"{row['yhat']:6.2f}%"
+                lower_str = f"{row.get('yhat_lower', float('nan')):6.2f}%"
+                upper_str = f"{row.get('yhat_upper', float('nan')):6.2f}%"
+                print(f"  {ds_str}  |  yhat (forecast): {yhat_str}  |  90% CI: [{lower_str} ... {upper_str}]")
+            print()
+
 
 
 def cmd_evaluate(args: argparse.Namespace) -> None:

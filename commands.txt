@@ -1,0 +1,24 @@
+# 1. Setup
+uv venv .venv && source .venv/bin/activate
+uv pip install torch==2.1.2 --index-url https://download.pytorch.org/whl/cpu
+uv pip install -r requirements.txt
+
+# 2. Sanity check
+python main.py inspect
+
+# 3. Run tests (no torch needed)
+python -m pytest tests/ -v
+
+# 4. Find best n_lags (trains both n_lags=7 and 14, prints winner)
+python main.py compare-lags --host HYDUPINTAPP16
+python main.py compare-lags --host JPRUPIWEBCRP02
+
+# 5. Train final models
+python main.py fit --all --n-lags 7   # or 14, whichever won
+
+# 6. Generate 7-day forecast charts → outputs/forecasts/*.png
+python main.py predict --host HYDUPINTAPP16 --n-lags 7
+python main.py predict --host JPRUPIWEBCRP02 --n-lags 7
+
+# 7. Evaluate accuracy
+python main.py evaluate --host HYDUPINTAPP16 --holdout 30

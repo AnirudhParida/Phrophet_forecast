@@ -58,16 +58,22 @@ import numpy as np
 import pandas as pd
 
 from config.settings import (
+    AR_LAYERS,
     BATCH_SIZE,
+    CAP_VALUE,
+    COUNTRY_HOLIDAYS,
     DAILY_SEASONALITY,
     EPOCHS,
+    FLOOR_VALUE,
     FORECASTS_DIR,
     FREQ,
+    GROWTH,
     HOLDOUT_DAYS,
     HOSTS,
     LEARNING_RATE,
     LOSS_FUNC,
     MAX_WORKERS,
+    METRIC_N_LAGS,
     METRICS,
     MODELS_DIR,
     N_FORECASTS,
@@ -75,6 +81,7 @@ from config.settings import (
     NORMALIZE,
     QUANTILES,
     RANDOM_SEED,
+    TWO_STAGE_REGRESSORS,
     WEEKLY_SEASONALITY,
     YEARLY_SEASONALITY,
 )
@@ -91,9 +98,11 @@ logger = logging.getLogger(__name__)
 
 # Map each target metric to its cross-regressor columns
 _REGRESSOR_MAP: dict[str, list[str]] = {
-    "cpu_pct":    ["memory_pct", "disk_pct"],
-    "memory_pct": ["cpu_pct",    "disk_pct"],
-    "disk_pct":   ["cpu_pct",    "memory_pct"],
+    "cpu_pct":          ["memory_pct", "disk_pct", "disk_read_ops", "disk_write_bytes"],
+    "memory_pct":       ["cpu_pct", "disk_pct", "disk_read_ops", "disk_write_bytes"],
+    "disk_pct":         ["cpu_pct", "memory_pct", "disk_read_ops", "disk_write_bytes"],
+    "disk_read_ops":    ["cpu_pct", "memory_pct", "disk_pct", "disk_write_bytes"],
+    "disk_write_bytes": ["cpu_pct", "memory_pct", "disk_pct", "disk_read_ops"],
 }
 
 
@@ -175,6 +184,12 @@ class ServerMetricsForecaster:
         logger.info("Loaded data for hosts: %s", list(self._host_data.keys()))
         return self._host_data
 
+    def _resolve_n_lags(self, metric: str, override_n_lags: Optional[int] = None) -> int:
+        """Resolve metric-specific n_lags lookback window."""
+        if override_n_lags is not None:
+            return override_n_lags
+        return METRIC_N_LAGS.get(metric, self.n_lags)
+
     # ------------------------------------------------------------------
     # 2. Fit
     # ------------------------------------------------------------------
@@ -201,17 +216,15 @@ class ServerMetricsForecaster:
                 "No data loaded.  Call load_and_preprocess() first."
             )
 
-        effective_n_lags = n_lags if n_lags is not None else self.n_lags
-
         if host_name is not None:
-            self._fit_host(host_name, effective_n_lags)
+            self._fit_host(host_name, n_lags)
         elif parallel:
-            self._fit_all_parallel(effective_n_lags)
+            self._fit_all_parallel(n_lags)
         else:
             for alias in self._host_data:
-                self._fit_host(alias, effective_n_lags)
+                self._fit_host(alias, n_lags)
 
-    def _fit_host(self, host_alias: str, n_lags: int) -> None:
+    def _fit_host(self, host_alias: str, n_lags: Optional[int] = None) -> None:
         """Train all three metric models for a single host."""
         if host_alias not in self._host_data:
             raise KeyError(
@@ -223,13 +236,14 @@ class ServerMetricsForecaster:
         self._models.setdefault(host_alias, {})
 
         for metric in METRICS:
+            metric_n_lags = self._resolve_n_lags(metric, n_lags)
             logger.info(
                 "Fitting [%s | %s]  n_lags=%d  n_forecasts=%d …",
-                host_alias, metric, n_lags, self.n_forecasts,
+                host_alias, metric, metric_n_lags, self.n_forecasts,
             )
-            model = self._build_model(n_lags)
+            model = self._build_model(metric_n_lags)
             train_df = self._prepare_np_dataframe(df, metric)
-            model = self._add_regressors(model, metric, n_lags)
+            model = self._add_regressors(model, metric, metric_n_lags)
 
             # NeuralProphet fit returns the model itself
             metrics_df = model.fit(
@@ -245,15 +259,11 @@ class ServerMetricsForecaster:
             )
 
             self._models[host_alias][metric] = model
-            self._save_model(model, host_alias, metric, n_lags)
+            self._save_model(model, host_alias, metric, metric_n_lags)
 
-    def _fit_all_parallel(self, n_lags: int) -> None:
+    def _fit_all_parallel(self, n_lags: Optional[int] = None) -> None:
         """
         Fit all hosts in parallel using separate processes.
-
-        Each process loads the data independently (no shared state), trains
-        its host's models, and saves them to disk.  The parent process then
-        reloads the saved models.
         """
         host_aliases = list(self._host_data.keys())
         logger.info(
@@ -277,7 +287,8 @@ class ServerMetricsForecaster:
         for alias in host_aliases:
             self._models.setdefault(alias, {})
             for metric in METRICS:
-                self._models[alias][metric] = self._load_model(alias, metric, n_lags)
+                metric_n_lags = self._resolve_n_lags(metric, n_lags)
+                self._models[alias][metric] = self._load_model(alias, metric, metric_n_lags)
 
     # ------------------------------------------------------------------
     # 3. Predict
@@ -288,35 +299,45 @@ class ServerMetricsForecaster:
         host_name: str,
         n_lags: Optional[int] = None,
         save_charts: bool = True,
+        use_two_stage: bool = TWO_STAGE_REGRESSORS,
     ) -> dict[str, pd.DataFrame]:
         """
-        Generate 7-day ahead forecasts for all metrics of a host.
-
-        Saves individual metric charts and an overview PNG to
-        ``outputs/forecasts/``.
+        Generate n_forecasts-day ahead forecasts for all metrics of a host.
 
         Parameters
         ----------
-        host_name   : Short host alias.
-        n_lags      : n_lags of the saved model to load (must match fit).
-        save_charts : If True, persist PNG charts to disk.
+        host_name     : Short host alias.
+        n_lags        : Override n_lags for saved model lookup.
+        save_charts   : If True, persist PNG charts to disk.
+        use_two_stage : If True, use univariate Stage 1 forecasts for future regressors.
 
         Returns
         -------
         Dict[metric → NeuralProphet prediction DataFrame]
         """
-        effective_n_lags = n_lags if n_lags is not None else self.n_lags
         df = self._get_host_df(host_name)
-        self._ensure_models_loaded(host_name, effective_n_lags)
+
+        # Stage 1 univariate regressor predictions
+        stage1_forecasts = None
+        if use_two_stage:
+            logger.info("Running Stage-1 univariate forecasts for regressors [%s] …", host_name)
+            try:
+                stage1_forecasts = self._predict_stage1_univariate(df, override_n_lags=n_lags)
+            except Exception as exc:
+                logger.warning("Stage-1 regressor forecast failed: %s. Falling back to rolling means.", exc)
 
         forecast_results: dict[str, pd.DataFrame] = {}
 
         for metric in METRICS:
+            metric_n_lags = self._resolve_n_lags(metric, n_lags)
+            self._ensure_metric_model_loaded(host_name, metric, metric_n_lags)
             model = self._models[host_name][metric]
             train_df = self._prepare_np_dataframe(df, metric)
-            future_df = self._make_future_df(model, train_df, df, metric, effective_n_lags)
+            future_df = self._make_future_df(
+                model, train_df, df, metric, metric_n_lags, stage1_forecasts=stage1_forecasts
+            )
 
-            logger.info("Predicting [%s | %s] …", host_name, metric)
+            logger.info("Predicting [%s | %s]  n_lags=%d …", host_name, metric, metric_n_lags)
             forecast = model.predict(future_df)
             forecast_results[metric] = forecast
 
@@ -326,7 +347,7 @@ class ServerMetricsForecaster:
                     metric=metric,
                     actuals_df=df[["ds", metric]],
                     forecast_df=forecast,
-                    n_lags=effective_n_lags,
+                    n_lags=metric_n_lags,
                     save=True,
                 )
 
@@ -335,7 +356,7 @@ class ServerMetricsForecaster:
                 host_alias=host_name,
                 actuals_df=df,
                 forecasts=forecast_results,
-                n_lags=effective_n_lags,
+                n_lags=n_lags if n_lags is not None else self.n_lags,
                 save=True,
             )
             print(f"\n✅ Charts saved to: {FORECASTS_DIR}/")
@@ -354,41 +375,27 @@ class ServerMetricsForecaster:
     ) -> dict[str, dict[str, float]]:
         """
         Train on all-except-holdout rows and evaluate on the holdout set.
-
-        Uses a *trailing* holdout split (last ``holdout_days`` rows) to honour
-        temporal ordering.  Fits temporary models — does NOT overwrite saved
-        full-data models.
-
-        Parameters
-        ----------
-        host_name    : Short host alias.
-        holdout_days : Number of trailing days to withhold.
-        n_lags       : n_lags to use for the evaluation run.
-
-        Returns
-        -------
-        Dict[metric → {MAE, RMSE, MAPE}]
         """
-        effective_n_lags = n_lags if n_lags is not None else self.n_lags
         df = self._get_host_df(host_name)
-
-        train_df_full, holdout_df = train_holdout_split(
-            df,
-            holdout_days=holdout_days,
-            n_lags=effective_n_lags,
-            n_forecasts=self.n_forecasts,
-        )
-
         eval_results: dict[str, dict[str, float]] = {}
 
         for metric in METRICS:
+            metric_n_lags = self._resolve_n_lags(metric, n_lags)
             logger.info(
-                "Evaluating [%s | %s] with holdout=%d days …",
-                host_name, metric, holdout_days,
+                "Evaluating [%s | %s] with holdout=%d days, n_lags=%d …",
+                host_name, metric, holdout_days, metric_n_lags,
             )
+
+            train_df_full, holdout_df = train_holdout_split(
+                df,
+                holdout_days=holdout_days,
+                n_lags=metric_n_lags,
+                n_forecasts=self.n_forecasts,
+            )
+
             # Fit a temporary model on the training split
-            temp_model = self._build_model(effective_n_lags)
-            temp_model = self._add_regressors(temp_model, metric, effective_n_lags)
+            temp_model = self._build_model(metric_n_lags)
+            temp_model = self._add_regressors(temp_model, metric, metric_n_lags)
             train_np = self._prepare_np_dataframe(train_df_full, metric)
             temp_model.fit(train_np, freq=FREQ, progress="bar")
 
@@ -398,7 +405,7 @@ class ServerMetricsForecaster:
                 train_df=train_df_full,
                 holdout_df=holdout_df,
                 metric=metric,
-                n_lags=effective_n_lags,
+                n_lags=metric_n_lags,
             )
 
             eval_results[metric] = compute_metrics(
@@ -407,7 +414,7 @@ class ServerMetricsForecaster:
                 metric_name=f"{host_name}|{metric}",
             )
 
-        print(format_evaluation_table(eval_results, host_name, effective_n_lags))
+        print(format_evaluation_table(eval_results, host_name, n_lags if n_lags is not None else self.n_lags))
         return eval_results
 
     # ------------------------------------------------------------------
@@ -421,15 +428,6 @@ class ServerMetricsForecaster:
     ) -> tuple[dict, dict]:
         """
         Train with n_lags=7 and n_lags=14, compare holdout RMSE, print winner.
-
-        Parameters
-        ----------
-        host_name    : Short host alias.
-        holdout_days : Holdout window size.
-
-        Returns
-        -------
-        (results_7, results_14) tuple of evaluation dicts.
         """
         print(f"\n📊  Comparing n_lags=7 vs n_lags=14 for {host_name} …\n")
         results_7 = self.evaluate(host_name, holdout_days=holdout_days, n_lags=7)
@@ -441,45 +439,61 @@ class ServerMetricsForecaster:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _predict_stage1_univariate(
+        self,
+        df: pd.DataFrame,
+        override_n_lags: Optional[int] = None,
+    ) -> dict[str, pd.DataFrame]:
+        """Fit fast univariate baseline models to project future regressor trajectories."""
+        stage1_forecasts = {}
+        for metric in METRICS:
+            metric_n_lags = self._resolve_n_lags(metric, override_n_lags)
+            model = self._build_model(metric_n_lags)
+            np_df = df[["ds", metric]].rename(columns={metric: "y"}).copy()
+            np_df["ds"] = pd.to_datetime(np_df["ds"])
+            if GROWTH == "logistic" and metric.endswith("_pct"):
+                np_df["cap"] = CAP_VALUE
+                np_df["floor"] = FLOOR_VALUE
+            model.fit(np_df, freq=FREQ, progress="none")
+            fut = model.make_future_dataframe(df=np_df, periods=self.n_forecasts, n_historic_predictions=True)
+            if GROWTH == "logistic" and metric.endswith("_pct"):
+                fut["cap"] = CAP_VALUE
+                fut["floor"] = FLOOR_VALUE
+            pred = model.predict(fut)
+            stage1_forecasts[metric] = pred
+        return stage1_forecasts
+
     @staticmethod
     def _build_model(n_lags: int) -> "NeuralProphet":
         """Construct a NeuralProphet instance with pipeline hyper-parameters."""
-        # pyrefly: ignore [missing-import]
         from neuralprophet import NeuralProphet  # deferred import
 
-        return NeuralProphet(
-            # --- Forecasting horizon ---
+        kwargs = dict(
             n_forecasts=N_FORECASTS,
-            # --- Auto-regression ---
-            # n_lags=7  : captures weekly operational cycle (Mon–Fri vs weekend).
-            # n_lags=14 : captures a 2-week workload cycle.
-            # Both discard fewer than 4 % of 366 rows as AR warmup.
             n_lags=n_lags,
-            # --- Seasonality ---
-            # yearly_seasonality=False: only 1 full year of data → high overfitting
-            #   risk if Fourier components are fitted to a single seasonal cycle.
+            growth=GROWTH,
+            ar_layers=AR_LAYERS,
             yearly_seasonality=YEARLY_SEASONALITY,
-            # weekly_seasonality=True: Mon–Fri vs weekend load differences are real.
             weekly_seasonality=WEEKLY_SEASONALITY,
-            # daily_seasonality=False: data is already daily-aggregated;
-            #   intraday sub-patterns are not present.
             daily_seasonality=DAILY_SEASONALITY,
-            # --- Loss ---
-            # Huber loss: penalises small errors quadratically and large errors
-            #   linearly, making it robust to sudden operational spikes (batch jobs,
-            #   deployments) that would otherwise dominate MSE training.
-            loss_func=LOSS_FUNC,
-            # --- Optimisation ---
             learning_rate=LEARNING_RATE,
             epochs=EPOCHS,
             batch_size=BATCH_SIZE,
-            # --- Normalisation ---
-            # "minmax" maps [0, 100] inputs to [0, 1] for stable gradient updates.
-            # Raw decimal values already scaled to % before this point.
             normalize=NORMALIZE,
-            # --- Confidence intervals ---
             quantiles=QUANTILES,
         )
+        # Omit loss_func when quantiles are active so NeuralProphet uses PinballLoss for quantile bounds
+        if not QUANTILES and LOSS_FUNC:
+            kwargs["loss_func"] = LOSS_FUNC
+
+        model = NeuralProphet(**kwargs)
+        if COUNTRY_HOLIDAYS:
+            try:
+                model.add_country_holidays(country_name=COUNTRY_HOLIDAYS)
+            except Exception as exc:
+                logger.warning("Could not add country holidays '%s': %s", COUNTRY_HOLIDAYS, exc)
+        return model
+
 
     @staticmethod
     def _add_regressors(
@@ -487,36 +501,22 @@ class ServerMetricsForecaster:
         target_metric: str,
         n_lags: int,
     ) -> "NeuralProphet":
-        """
-        Register the two cross-metric lagged regressors for a given target.
-
-        ``add_lagged_regressor(n_lags=k)`` tells NeuralProphet to use the
-        last k observations of the regressor as additional input features.
-        Setting k == model n_lags keeps the temporal alignment consistent
-        across AR components and regressors.
-        """
+        """Register cross-metric lagged regressors."""
         for reg_col in _REGRESSOR_MAP[target_metric]:
             model.add_lagged_regressor(names=reg_col, n_lags=n_lags)
         return model
 
     @staticmethod
     def _prepare_np_dataframe(df: pd.DataFrame, target_metric: str) -> pd.DataFrame:
-        """
-        Reformat a host DataFrame into NeuralProphet's expected schema.
-
-        NeuralProphet expects:
-          - ``ds`` : datetime column (already normalised to midnight)
-          - ``y``  : target time series values
-          - Additional columns for lagged regressors
-
-        The target metric is aliased to ``y``; all other metric columns are
-        kept alongside as regressor columns.
-        """
+        """Reformat a host DataFrame into NeuralProphet's expected schema."""
         np_df = df.rename(columns={target_metric: "y"}).copy()
-        # Ensure ds is datetime64[ns]
         np_df["ds"] = pd.to_datetime(np_df["ds"])
-        # Keep only ds, y, and the two regressor columns
+        if GROWTH == "logistic" and target_metric.endswith("_pct"):
+            np_df["cap"] = CAP_VALUE
+            np_df["floor"] = FLOOR_VALUE
         keep_cols = ["ds", "y"] + _REGRESSOR_MAP[target_metric]
+        if GROWTH == "logistic" and target_metric.endswith("_pct"):
+            keep_cols.extend(["cap", "floor"])
         return np_df[keep_cols].reset_index(drop=True)
 
     def _make_future_df(
@@ -526,38 +526,30 @@ class ServerMetricsForecaster:
         full_host_df: pd.DataFrame,
         target_metric: str,
         n_lags: int,
+        stage1_forecasts: Optional[dict[str, pd.DataFrame]] = None,
     ) -> pd.DataFrame:
-        """
-        Build the future DataFrame for NeuralProphet's predict() call.
-
-        NeuralProphet's ``make_future_dataframe()`` creates ``n_forecasts`` new
-        rows beyond the last training date.  For lagged regressors, it requires
-        values for the regressor columns in those future rows.
-
-        Since we cannot know future CPU/memory/disk values precisely, we fill
-        future regressor cells with the rolling mean of the last ``n_lags``
-        observed values.  This is the least-biased naive estimate available
-        without a second forecasting stage.
-
-        For production use, this can be replaced with:
-          - Pre-computed forecasts from a simpler model (e.g. ETS or SARIMA)
-          - Agent-based simulation of load patterns
-          - External capacity-planning data
-        """
+        """Build the future DataFrame for NeuralProphet's predict() call."""
         future = model.make_future_dataframe(
             df=train_np_df,
             periods=self.n_forecasts,
             n_historic_predictions=True,
         )
+        if GROWTH == "logistic" and target_metric.endswith("_pct"):
+            future["cap"] = CAP_VALUE
+            future["floor"] = FLOOR_VALUE
 
         regressor_cols = _REGRESSOR_MAP[target_metric]
 
         for reg_col in regressor_cols:
-            # Last n_lags actual values of this regressor
+            if stage1_forecasts and reg_col in stage1_forecasts:
+                s1_df = stage1_forecasts[reg_col]
+                yhat_col = "yhat1" if "yhat1" in s1_df.columns else "yhat"
+                if yhat_col in s1_df.columns:
+                    ds_map = dict(zip(pd.to_datetime(s1_df["ds"]), s1_df[yhat_col]))
+                    future[reg_col] = future["ds"].map(ds_map).fillna(future[reg_col])
+
             last_vals = full_host_df[reg_col].values[-n_lags:]
             rolling_mean = float(np.mean(last_vals))
-
-            # Fill NaN cells (future rows) with the rolling mean
             future[reg_col] = future[reg_col].fillna(rolling_mean)
 
         return future
@@ -570,33 +562,12 @@ class ServerMetricsForecaster:
         metric: str,
         n_lags: int,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Batch holdout evaluation using n_forecasts-step prediction windows.
-
-        NeuralProphet predict() output structure (confirmed empirically):
-        ┌─────────────────────────────────────────────────────────┐
-        │ Historic rows (y = actual):  yhat1..yhat7 all valid     │
-        │ Future row T+1 (y = NaN):    yhat1 valid, yhat2..7 valid│
-        │ Future row T+2:              yhat1 = NaN, yhat2..7 valid│
-        │ ...                                                     │
-        │ Future row T+7:              yhat1..6 = NaN, yhat7 valid│
-        └─────────────────────────────────────────────────────────┘
-
-        The FIRST FUTURE ROW contains yhat1..yhat7 = n_forecasts step-ahead
-        predictions from the context ending at the last training day.
-        We use these values for the evaluation of the next n_forecasts holdout
-        days, then extend context with the actual values before the next batch.
-
-        This avoids the NaN trap of iloc[-1] (last future row) where yhat1 is
-        always NaN, and avoids the slow row-by-row rolling approach.
-        """
         actuals: list[float] = []
         predicted: list[float] = []
         holdout_days = len(holdout_df)
 
         context_df = train_df.copy()
 
-        # Process holdout in batches of n_forecasts days
         for batch_start in range(0, holdout_days, self.n_forecasts):
             batch_end = min(batch_start + self.n_forecasts, holdout_days)
             batch_size = batch_end - batch_start
@@ -608,8 +579,6 @@ class ServerMetricsForecaster:
             try:
                 forecast = model.predict(future)
 
-                # Identify the FIRST FUTURE ROW (y = NaN).
-                # Its yhat1..yhat7 are the batch predictions for days +1..+7.
                 future_mask = forecast["y"].isna() if "y" in forecast.columns \
                     else pd.Series(
                         [False] * (len(forecast) - self.n_forecasts)
@@ -623,7 +592,6 @@ class ServerMetricsForecaster:
                     predicted.extend([np.nan] * batch_size)
                 else:
                     first_future = future_rows.iloc[0]
-                    # Extract yhat1..yhat{batch_size} from the first future row
                     batch_preds = [
                         float(first_future.get(f"yhat{i + 1}", np.nan))
                         for i in range(batch_size)
@@ -635,32 +603,17 @@ class ServerMetricsForecaster:
                 predicted.extend([np.nan] * batch_size)
 
             actuals.extend(batch_holdout[metric].tolist())
-
-            # Extend context with ACTUAL holdout values before next batch
             context_df = pd.concat([context_df, batch_holdout], ignore_index=True)
 
-        # Filter out NaN prediction pairs
         pairs = [
             (a, p)
             for a, p in zip(actuals, predicted)
-            if not np.isnan(p)
+            if not (np.isnan(a) or np.isnan(p))
         ]
         if not pairs:
-            raise RuntimeError(
-                "All holdout predictions returned NaN. "
-                "Check that the model was trained long enough and that "
-                "regressor columns are present in the data."
-            )
-        a_arr, p_arr = zip(*pairs)
-        logger.info(
-            "Holdout evaluation: %d/%d predictions valid.",
-            len(pairs), len(actuals),
-        )
-        return np.array(a_arr), np.array(p_arr)
-
-    # ------------------------------------------------------------------
-    # Model save / load
-    # ------------------------------------------------------------------
+            return np.array([]), np.array([])
+        act_arr, pred_arr = zip(*pairs)
+        return np.array(act_arr), np.array(pred_arr)
 
     @staticmethod
     def _model_path(host_alias: str, metric: str, n_lags: int) -> Path:
@@ -673,13 +626,6 @@ class ServerMetricsForecaster:
         metric: str,
         n_lags: int,
     ) -> None:
-        """
-        Persist a trained NeuralProphet model to disk.
-
-        Uses ``torch.save`` directly rather than ``neuralprophet.save`` because:
-        - ``NeuralProphet`` has no instance-level ``.save()`` method.
-        - ``neuralprophet.save()`` wraps ``torch.save`` identically.
-        """
         import torch  # deferred import
 
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
@@ -693,17 +639,6 @@ class ServerMetricsForecaster:
         metric: str,
         n_lags: int,
     ) -> "NeuralProphet":
-        """
-        Load a persisted NeuralProphet model from disk.
-
-        Uses ``torch.load(weights_only=False)`` explicitly because:
-        - PyTorch >= 2.6 changed the default of ``weights_only`` from
-          ``False`` → ``True`` (security hardening).
-        - NeuralProphet model files contain full Python objects
-          (config dataclasses) that cannot be loaded with
-          ``weights_only=True``.
-        - The model files are written by this pipeline and are trusted.
-        """
         import torch  # deferred import
 
         path = self._model_path(host_alias, metric, n_lags)
@@ -715,18 +650,25 @@ class ServerMetricsForecaster:
         logger.info("Loading model ← %s", path)
         return torch.load(str(path), weights_only=False)
 
-    def _ensure_models_loaded(self, host_alias: str, n_lags: int) -> None:
-        """Load saved models from disk if not already in memory."""
+    def _ensure_metric_model_loaded(
+        self,
+        host_alias: str,
+        metric: str,
+        n_lags: int,
+    ) -> None:
         if host_alias not in self._models:
             self._models[host_alias] = {}
+        if metric not in self._models[host_alias]:
+            self._models[host_alias][metric] = self._load_model(
+                host_alias, metric, n_lags
+            )
+
+    def _ensure_models_loaded(self, host_alias: str, n_lags: Optional[int] = None) -> None:
         for metric in METRICS:
-            if metric not in self._models[host_alias]:
-                self._models[host_alias][metric] = self._load_model(
-                    host_alias, metric, n_lags
-                )
+            metric_n_lags = self._resolve_n_lags(metric, n_lags)
+            self._ensure_metric_model_loaded(host_alias, metric, metric_n_lags)
 
     def _get_host_df(self, host_alias: str) -> pd.DataFrame:
-        """Retrieve cached host DataFrame, raising a clear error if not loaded."""
         if not self._host_data:
             raise RuntimeError(
                 "No data loaded.  Call load_and_preprocess() first."
@@ -743,23 +685,13 @@ class ServerMetricsForecaster:
 # Parallel worker (top-level function required for multiprocessing pickling)
 # ---------------------------------------------------------------------------
 
-def _parallel_fit_worker(host_alias: str, n_lags: int, n_forecasts: int) -> None:
-    """
-    Top-level worker function for ``ProcessPoolExecutor``.
-
-    Must be a module-level function (not a method) so that Python's ``pickle``
-    can serialise it for subprocess dispatch.
-
-    Each worker creates its own ``ServerMetricsForecaster`` instance,
-    ingests data, and fits the models — completely independent from other
-    workers.
-    """
+def _parallel_fit_worker(host_alias: str, n_lags: Optional[int], n_forecasts: int) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
     )
-    logger.info("Worker started: %s  n_lags=%d", host_alias, n_lags)
-    forecaster = ServerMetricsForecaster(n_lags=n_lags, n_forecasts=n_forecasts)
+    logger.info("Worker started: %s", host_alias)
+    forecaster = ServerMetricsForecaster(n_lags=N_LAGS_DEFAULT, n_forecasts=n_forecasts)
     forecaster.load_and_preprocess()
     forecaster.fit(host_name=host_alias, n_lags=n_lags)
     logger.info("Worker completed: %s", host_alias)

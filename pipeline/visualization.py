@@ -61,6 +61,23 @@ _FIGSIZE_SINGLE = (14, 5)
 _FIGSIZE_OVERVIEW = (16, 12)
 
 
+def get_y_formatter(metric: str):
+    def pct_formatter(x, _): return f"{x:.1f}%"
+    def bytes_formatter(x, _):
+        if x >= 1024**3: return f"{x / 1024**3:.1f} GB"
+        if x >= 1024**2: return f"{x / 1024**2:.1f} MB"
+        if x >= 1024: return f"{x / 1024:.1f} KB"
+        return f"{x:.0f} B"
+    def ops_formatter(x, _): return f"{x:.1f}"
+
+    if metric.endswith("_pct"):
+        return plt.FuncFormatter(pct_formatter)
+    elif "bytes" in metric:
+        return plt.FuncFormatter(bytes_formatter)
+    else:
+        return plt.FuncFormatter(ops_formatter)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -109,8 +126,8 @@ def plot_forecast(
             alpha=0.9,
         )
 
-        # --- Extract point forecasts and quantile bounds ---
-        forecast_rows = _extract_forecast_rows(forecast_df)
+        # Extract clean point predictions and quantiles (future window only)
+        forecast_rows = _extract_forecast_rows(forecast_df, metric)
         if forecast_rows is not None and len(forecast_rows) > 0:
             ax.plot(
                 forecast_rows["ds"],
@@ -150,7 +167,7 @@ def plot_forecast(
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d\n%Y"))
         ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
         plt.setp(ax.get_xticklabels(), rotation=0, ha="center", fontsize=8)
-        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.1f}%"))
+        ax.yaxis.set_major_formatter(get_y_formatter(metric))
         ax.set_ylabel(label, color=_PALETTE["text_fg"], fontsize=10)
         ax.set_title(title, color=_PALETTE["text_fg"], fontsize=12, pad=12)
         ax.tick_params(colors=_PALETTE["text_fg"])
@@ -159,7 +176,7 @@ def plot_forecast(
             spine.set_edgecolor(_PALETTE["grid"])
 
         # --- Stats annotation box ---
-        _add_stats_box(ax, actuals_df[metric], _PALETTE)
+        _add_stats_box(ax, actuals_df[metric], _PALETTE, metric=metric)
 
         legend = ax.legend(
             loc="upper left",
@@ -234,7 +251,7 @@ def plot_overview(
 
             # Forecast
             if metric in forecasts:
-                forecast_rows = _extract_forecast_rows(forecasts[metric])
+                forecast_rows = _extract_forecast_rows(forecasts[metric], metric)
                 if forecast_rows is not None and len(forecast_rows) > 0:
                     ax.plot(
                         forecast_rows["ds"],
@@ -265,12 +282,12 @@ def plot_overview(
                     )
 
             ax.set_ylabel(label, color=_PALETTE["text_fg"], fontsize=9)
-            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.1f}%"))
+            ax.yaxis.set_major_formatter(get_y_formatter(metric))
             ax.tick_params(colors=_PALETTE["text_fg"], labelsize=8)
             ax.grid(True, color=_PALETTE["grid"], linewidth=0.4, alpha=0.5)
             for spine in ax.spines.values():
                 spine.set_edgecolor(_PALETTE["grid"])
-            _add_stats_box(ax, actuals_df[metric], _PALETTE, fontsize=7)
+            _add_stats_box(ax, actuals_df[metric], _PALETTE, fontsize=7, metric=metric)
             ax.legend(loc="upper left", fontsize=7, framealpha=0.2,
                       facecolor=_PALETTE["text_box"], labelcolor=_PALETTE["text_fg"])
 
@@ -299,48 +316,34 @@ def plot_overview(
 # ---------------------------------------------------------------------------
 
 
-def _extract_forecast_rows(forecast_df: pd.DataFrame) -> pd.DataFrame | None:
+def extract_forecast_rows(
+    df: pd.DataFrame, metric: str = None, n_steps: int = 30
+) -> pd.DataFrame | None:
     """
-    Extract future forecast rows from a NeuralProphet prediction DataFrame.
-
-    NeuralProphet predict() returns one row per historical timestamp PLUS
-    future rows.  Each row has ``yhat1`` … ``yhat{n_forecasts}`` columns
-    representing the step-ahead predictions made from that row's context.
-
-    For visualisation we want the *last* forecast batch (from the final
-    historical row) as a simple (ds, yhat) sequence projected into the future.
-
-    Strategy
-    ---------
-    1. Identify the last row where the actual ``y`` value is not NaN
-       (= last historical point).
-    2. From that row's ``yhat1`` … ``yhat7`` values, create a new DataFrame
-       with future dates ds+1, ds+2, …, ds+7.
-    3. If quantile columns are present (``yhat1 5.0%`` / ``yhat1 95.0%``),
-       extract the lower and upper bounds.
+    Extract clean future forecast rows (ds, yhat, yhat_lower, yhat_upper)
+    from a NeuralProphet prediction DataFrame.
     """
-    if forecast_df is None or forecast_df.empty:
+    if df is None or df.empty:
         return None
 
     # Find yhat columns
     yhat_cols = sorted(
-        [c for c in forecast_df.columns if c.startswith("yhat") and c[4:].isdigit()],
+        [c for c in df.columns if c.startswith("yhat") and c[4:].isdigit()],
         key=lambda c: int(c[4:]),
     )
     if not yhat_cols:
-        logger.warning("No yhat columns found in forecast DataFrame.")
         return None
 
     # Last historical row (where y is known)
-    if "y" in forecast_df.columns:
-        last_hist_idx = forecast_df["y"].last_valid_index()
+    if "y" in df.columns:
+        last_hist_idx = df["y"].last_valid_index()
     else:
-        last_hist_idx = forecast_df.index[-len(yhat_cols) - 1]
+        last_hist_idx = df.index[-len(yhat_cols) - 1]
 
     if last_hist_idx is None:
         return None
 
-    last_row = forecast_df.loc[last_hist_idx]
+    last_row = df.loc[last_hist_idx]
     last_ds = pd.to_datetime(last_row["ds"])
     n_steps = len(yhat_cols)
 
@@ -349,17 +352,41 @@ def _extract_forecast_rows(forecast_df: pd.DataFrame) -> pd.DataFrame | None:
 
     result = pd.DataFrame({"ds": future_dates, "yhat": yhat_values})
 
-    # Quantile bounds (NeuralProphet names them like "yhat1 5.0%", "yhat1 95.0%")
-    lower_cols = [c for c in forecast_df.columns if "5.0%" in c and "yhat" in c]
-    upper_cols = [c for c in forecast_df.columns if "95.0%" in c and "yhat" in c]
+    # Quantiles
+    lower_cols = sorted(
+        [c for c in df.columns if "5.0%" in c and c.startswith("yhat")],
+        key=lambda c: int(c.split(" ")[0][4:]),
+    )
+    upper_cols = sorted(
+        [c for c in df.columns if "95.0%" in c and c.startswith("yhat")],
+        key=lambda c: int(c.split(" ")[0][4:]),
+    )
 
-    if len(lower_cols) == n_steps and len(upper_cols) == n_steps:
-        lower_cols_sorted = sorted(lower_cols, key=lambda c: int(c.split(" ")[0][4:]))
-        upper_cols_sorted = sorted(upper_cols, key=lambda c: int(c.split(" ")[0][4:]))
-        result["yhat_lower"] = [last_row[col] for col in lower_cols_sorted]
-        result["yhat_upper"] = [last_row[col] for col in upper_cols_sorted]
+    if lower_cols and upper_cols:
+        result["yhat_lower"] = [last_row[col] for col in lower_cols[:n_steps]]
+        result["yhat_upper"] = [last_row[col] for col in upper_cols[:n_steps]]
+
+    # Clip values: percentages to [0.0, 100.0], others to [0.0, None]
+    upper_bound = 100.0 if metric is None or metric.endswith("_pct") else None
+
+    result["yhat"] = result["yhat"].clip(0.0, upper_bound)
+    if "yhat_lower" in result.columns and "yhat_upper" in result.columns:
+        raw_lower = result["yhat_lower"].clip(0.0, upper_bound)
+        raw_upper = result["yhat_upper"].clip(0.0, upper_bound)
+        fixed_lower = raw_lower.combine(raw_upper, min)
+        fixed_upper = raw_lower.combine(raw_upper, max)
+        result["yhat_lower"] = np.minimum(fixed_lower.values, result["yhat"].values)
+        result["yhat_upper"] = np.maximum(fixed_upper.values, result["yhat"].values)
+    elif "yhat_lower" in result.columns:
+        result["yhat_lower"] = result["yhat_lower"].clip(0.0, upper_bound)
+    elif "yhat_upper" in result.columns:
+        result["yhat_upper"] = result["yhat_upper"].clip(0.0, upper_bound)
 
     return result
+
+_extract_forecast_rows = extract_forecast_rows
+
+
 
 
 def _add_stats_box(
@@ -367,15 +394,20 @@ def _add_stats_box(
     series: pd.Series,
     palette: dict,
     fontsize: int = 8,
+    metric: str = "pct",
 ) -> None:
     """
     Annotate the top-right corner of an axes with descriptive statistics.
     """
+    unit = "%" if metric.endswith("_pct") else ""
+    if "bytes" in metric:
+        unit = " B"
+    
     stats_text = (
-        f"μ={series.mean():.2f}%  "
-        f"σ={series.std():.2f}%\n"
-        f"min={series.min():.2f}%  "
-        f"max={series.max():.2f}%"
+        f"μ={series.mean():.2f}{unit}  "
+        f"σ={series.std():.2f}{unit}\n"
+        f"min={series.min():.2f}{unit}  "
+        f"max={series.max():.2f}{unit}"
     )
     ax.text(
         0.99, 0.97,

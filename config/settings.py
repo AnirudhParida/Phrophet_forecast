@@ -35,6 +35,14 @@ DISK_FILE: Path = (
     DATA_DIR
     / "Disk available % (Aug 29, 2025, 05_30 - Aug 29, 2026, 05_30).xlsx"
 )
+DISK_READ_FILE: Path = (
+    DATA_DIR
+    / "Disk read operations per second +3 (Aug 29, 2025, 05_30 - Aug 29, 2026, 05_30).xlsx"
+)
+DISK_WRITE_FILE: Path = (
+    DATA_DIR
+    / "Disk write bytes per second +3 (Aug 29, 2025, 05_30 - Aug 29, 2026, 05_30).xlsx"
+)
 
 # Output directories created automatically at runtime
 MODELS_DIR: Path = PROJECT_ROOT / "models" / "saved"
@@ -53,13 +61,15 @@ HOSTS: dict[str, str] = {
 }
 
 # Metrics produced by the ingestion layer
-METRICS: list[str] = ["cpu_pct", "memory_pct", "disk_pct"]
+METRICS: list[str] = ["cpu_pct", "memory_pct", "disk_pct", "disk_read_ops", "disk_write_bytes"]
 
 # Human-readable labels used in charts and log output
 METRIC_LABELS: dict[str, str] = {
     "cpu_pct": "CPU Usage (%)",
     "memory_pct": "Memory Available (%)",
     "disk_pct": "Disk Available (%)",
+    "disk_read_ops": "Disk Read (ops/s)",
+    "disk_write_bytes": "Disk Write (bytes/s)",
 }
 
 # ---------------------------------------------------------------------------
@@ -82,10 +92,14 @@ N_LAGS_DEFAULT: int = 7
 # - cpu_pct    : 7-day lookback (captures weekly workweek patterns without blurring spikes)
 # - memory_pct : 14-day lookback (captures 2-week memory consumption trends)
 # - disk_pct   : 14-day lookback (reduces RMSE by ~42% from 5.95 to 3.41 pp)
+# - disk_read_ops : Default 14-day lookback
+# - disk_write_bytes : Default 14-day lookback
 METRIC_N_LAGS: dict[str, int] = {
     "cpu_pct": 7,
     "memory_pct": 14,
     "disk_pct": 14,
+    "disk_read_ops": 14,
+    "disk_write_bytes": 14,
 }
 
 # Forecast horizon: 14 calendar days ahead
@@ -123,6 +137,25 @@ NORMALIZE: str = "minmax"
 QUANTILES: list[float] = [0.05, 0.95]
 
 # ---------------------------------------------------------------------------
+# Production Enhancements
+# ---------------------------------------------------------------------------
+
+# Growth curve type: "linear" or "off" (NeuralProphet trend component)
+GROWTH: str = "linear"
+CAP_VALUE: float = 100.0
+FLOOR_VALUE: float = 0.0
+
+# Non-linear deep AR layers (AR-Net multi-layer perceptron architecture)
+# [32, 16] creates a 2-hidden-layer deep AR network to model complex non-linear spikes.
+AR_LAYERS: list[int] | None = [32, 16]
+
+# Country holidays integration (Indian national holidays for regional server load patterns)
+COUNTRY_HOLIDAYS: str | None = "IN"
+
+# Two-stage forecast regressor pipeline: use stage-1 forecasts for future regressors
+TWO_STAGE_REGRESSORS: bool = True
+
+# ---------------------------------------------------------------------------
 # Evaluation
 # ---------------------------------------------------------------------------
 
@@ -141,3 +174,4 @@ RANDOM_SEED: int = 42
 
 # Maximum worker processes for parallel host fitting
 MAX_WORKERS: int = 2   # one per host; increase if more hosts are added
+
