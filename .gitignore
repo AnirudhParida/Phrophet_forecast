@@ -3,6 +3,5 @@
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
-models/
 .pytest_cache/
 lightning_logs/
