@@ -111,7 +111,7 @@ class TestComputeMetrics:
         actual = np.array([10.0, 20.0, 30.0])
         predicted = np.array([11.0, 19.0, 31.0])
         result = compute_metrics(actual, predicted, "cpu_pct")
-        assert set(result.keys()) == {"MAE", "RMSE", "MAPE"}
+        assert set(result.keys()) == {"MAE", "RMSE", "WAPE", "MAPE"}
 
     def test_values_are_positive(self):
         actual = np.array([10.0, 20.0, 30.0])

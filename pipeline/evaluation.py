@@ -53,6 +53,19 @@ def mape(actual: np.ndarray, predicted: np.ndarray, epsilon: float = 1e-6) -> fl
     return float(np.mean(np.abs((actual - predicted) / safe_actual)) * 100)
 
 
+def wape(actual: np.ndarray, predicted: np.ndarray, epsilon: float = 1e-6) -> float:
+    """
+    Weighted Absolute Percentage Error (%).
+
+    Divides the sum of absolute errors by the total actual sum, preventing extreme
+    percentage explosions on days with near-zero actual values.
+    """
+    sum_actual = np.sum(np.abs(actual))
+    if sum_actual < epsilon:
+        return 0.0
+    return float((np.sum(np.abs(actual - predicted)) / sum_actual) * 100)
+
+
 # ---------------------------------------------------------------------------
 # Holdout split helpers
 # ---------------------------------------------------------------------------
@@ -122,7 +135,7 @@ def compute_metrics(
     metric_name: str,
 ) -> dict[str, float]:
     """
-    Compute MAE, RMSE, and MAPE for one metric and return as a labelled dict.
+    Compute MAE, RMSE, WAPE, and MAPE for one metric and return as a labelled dict.
 
     Parameters
     ----------
@@ -132,20 +145,22 @@ def compute_metrics(
 
     Returns
     -------
-    dict with keys ``MAE``, ``RMSE``, ``MAPE``.
+    dict with keys ``MAE``, ``RMSE``, ``WAPE``, ``MAPE``.
     """
     mae_val = mae(actual, predicted)
     rmse_val = rmse(actual, predicted)
+    wape_val = wape(actual, predicted)
     mape_val = mape(actual, predicted)
 
     logger.info(
-        "[%s] MAE=%.4f pp | RMSE=%.4f pp | MAPE=%.2f %%",
+        "[%s] MAE=%.4f | RMSE=%.4f | WAPE=%.2f %% | MAPE=%.2f %%",
         metric_name,
         mae_val,
         rmse_val,
+        wape_val,
         mape_val,
     )
-    return {"MAE": mae_val, "RMSE": rmse_val, "MAPE": mape_val}
+    return {"MAE": mae_val, "RMSE": rmse_val, "WAPE": wape_val, "MAPE": mape_val}
 
 
 def format_evaluation_table(
@@ -158,7 +173,7 @@ def format_evaluation_table(
 
     Parameters
     ----------
-    eval_results : Dict[metric_name → {MAE, RMSE, MAPE}].
+    eval_results : Dict[metric_name → {MAE, RMSE, WAPE, MAPE}].
     host_alias   : Short host name for the table header.
     n_lags       : n_lags setting used in training (shown in header).
 
@@ -166,17 +181,28 @@ def format_evaluation_table(
     -------
     Multi-line string suitable for printing to stdout or logging.
     """
-    header = f"\n{'='*60}\n  Evaluation: {host_alias}  |  n_lags={n_lags}\n{'='*60}"
-    rows = [f"  {'Metric':<15} {'MAE':>10} {'RMSE':>10} {'MAPE':>10}"]
-    rows.append(f"  {'-'*47}")
+    header = f"\n{'='*75}\n  Evaluation: {host_alias}  |  n_lags={n_lags}\n{'='*75}"
+    rows = [f"  {'Metric':<18} {'MAE':>14} {'RMSE':>14} {'WAPE':>10} {'MAPE':>10}"]
+    rows.append(f"  {'-'*68}")
     for metric, scores in eval_results.items():
+        if metric.endswith("_bytes"):
+            mae_str = f"{scores['MAE'] / 1024.0:.2f} KB/s"
+            rmse_str = f"{scores['RMSE'] / 1024.0:.2f} KB/s"
+        else:
+            mae_str = f"{scores['MAE']:.2f} pp"
+            rmse_str = f"{scores['RMSE']:.2f} pp"
+
+        wape_str = f"{scores.get('WAPE', 0.0):.2f}%"
+        mape_str = f"{scores['MAPE']:.2f}%"
+
         rows.append(
-            f"  {metric:<15} "
-            f"{scores['MAE']:>9.4f} "
-            f"{scores['RMSE']:>9.4f} "
-            f"{scores['MAPE']:>9.2f}%"
+            f"  {metric:<18} "
+            f"{mae_str:>14} "
+            f"{rmse_str:>14} "
+            f"{wape_str:>10} "
+            f"{mape_str:>10}"
         )
-    rows.append(f"{'='*60}")
+    rows.append(f"{'='*75}")
     return header + "\n" + "\n".join(rows)
 
 

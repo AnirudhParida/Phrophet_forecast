@@ -37,7 +37,7 @@ DISK_FILE: Path = (
 )
 DISK_READ_FILE: Path = (
     DATA_DIR
-    / "Disk read operations per second +3 (Aug 29, 2025, 05_30 - Aug 29, 2026, 05_30).xlsx"
+    / "Disk read bytes per second +3 (Aug 29, 2025, 05_30 - Aug 29, 2026, 05_30).xlsx"
 )
 DISK_WRITE_FILE: Path = (
     DATA_DIR
@@ -61,14 +61,14 @@ HOSTS: dict[str, str] = {
 }
 
 # Metrics produced by the ingestion layer
-METRICS: list[str] = ["cpu_pct", "memory_pct", "disk_pct", "disk_read_ops", "disk_write_bytes"]
+METRICS: list[str] = ["cpu_pct", "memory_pct", "disk_pct", "disk_read_bytes", "disk_write_bytes"]
 
 # Human-readable labels used in charts and log output
 METRIC_LABELS: dict[str, str] = {
     "cpu_pct": "CPU Usage (%)",
     "memory_pct": "Memory Available (%)",
     "disk_pct": "Disk Available (%)",
-    "disk_read_ops": "Disk Read (ops/s)",
+    "disk_read_bytes": "Disk Read (bytes/s)",
     "disk_write_bytes": "Disk Write (bytes/s)",
 }
 
@@ -92,13 +92,13 @@ N_LAGS_DEFAULT: int = 7
 # - cpu_pct    : 7-day lookback (captures weekly workweek patterns without blurring spikes)
 # - memory_pct : 14-day lookback (captures 2-week memory consumption trends)
 # - disk_pct   : 14-day lookback (reduces RMSE by ~42% from 5.95 to 3.41 pp)
-# - disk_read_ops : Default 14-day lookback
+# - disk_read_bytes : Default 14-day lookback
 # - disk_write_bytes : Default 14-day lookback
 METRIC_N_LAGS: dict[str, int] = {
     "cpu_pct": 7,
     "memory_pct": 14,
     "disk_pct": 14,
-    "disk_read_ops": 14,
+    "disk_read_bytes": 14,
     "disk_write_bytes": 14,
 }
 

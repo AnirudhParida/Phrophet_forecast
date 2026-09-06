@@ -98,11 +98,11 @@ logger = logging.getLogger(__name__)
 
 # Map each target metric to its cross-regressor columns
 _REGRESSOR_MAP: dict[str, list[str]] = {
-    "cpu_pct":          ["memory_pct", "disk_pct", "disk_read_ops", "disk_write_bytes"],
-    "memory_pct":       ["cpu_pct", "disk_pct", "disk_read_ops", "disk_write_bytes"],
-    "disk_pct":         ["cpu_pct", "memory_pct", "disk_read_ops", "disk_write_bytes"],
-    "disk_read_ops":    ["cpu_pct", "memory_pct", "disk_pct", "disk_write_bytes"],
-    "disk_write_bytes": ["cpu_pct", "memory_pct", "disk_pct", "disk_read_ops"],
+    "cpu_pct":          ["memory_pct", "disk_pct", "disk_read_bytes", "disk_write_bytes"],
+    "memory_pct":       ["cpu_pct", "disk_pct", "disk_read_bytes", "disk_write_bytes"],
+    "disk_pct":         ["cpu_pct", "memory_pct", "disk_read_bytes", "disk_write_bytes"],
+    "disk_read_bytes":  ["cpu_pct", "memory_pct", "disk_pct", "disk_write_bytes"],
+    "disk_write_bytes": ["cpu_pct", "memory_pct", "disk_pct", "disk_read_bytes"],
 }
 
 

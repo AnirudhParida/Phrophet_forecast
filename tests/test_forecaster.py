@@ -22,6 +22,8 @@ def mock_df():
         "cpu_pct": np.linspace(20, 80, 100),
         "memory_pct": np.linspace(30, 70, 100),
         "disk_pct": np.linspace(10, 50, 100),
+        "disk_read_bytes": np.linspace(100, 1000, 100),
+        "disk_write_bytes": np.linspace(200, 2000, 100),
     })
 
 
@@ -31,6 +33,8 @@ def test_resolve_n_lags():
     assert forecaster._resolve_n_lags("cpu_pct") == METRIC_N_LAGS["cpu_pct"]
     assert forecaster._resolve_n_lags("memory_pct") == METRIC_N_LAGS["memory_pct"]
     assert forecaster._resolve_n_lags("disk_pct") == METRIC_N_LAGS["disk_pct"]
+    assert forecaster._resolve_n_lags("disk_read_bytes") == METRIC_N_LAGS["disk_read_bytes"]
+    assert forecaster._resolve_n_lags("disk_write_bytes") == METRIC_N_LAGS["disk_write_bytes"]
 
     # Override takes precedence
     assert forecaster._resolve_n_lags("cpu_pct", override_n_lags=14) == 14
@@ -44,6 +48,8 @@ def test_prepare_np_dataframe_adds_cap_and_floor(mock_df):
     assert "y" in np_df.columns
     assert "memory_pct" in np_df.columns
     assert "disk_pct" in np_df.columns
+    assert "disk_read_bytes" in np_df.columns
+    assert "disk_write_bytes" in np_df.columns
 
     if GROWTH == "logistic":
         assert "cap" in np_df.columns
@@ -68,11 +74,25 @@ def test_make_future_df_stage1_integration(mock_df):
     future_dates = pd.date_range("2026-04-11", periods=30, freq="D")
     s1_mem = pd.DataFrame({"ds": future_dates, "yhat1": [65.0] * 30})
     s1_disk = pd.DataFrame({"ds": future_dates, "yhat1": [45.0] * 30})
-    stage1 = {"memory_pct": s1_mem, "disk_pct": s1_disk}
+    s1_rbytes = pd.DataFrame({"ds": future_dates, "yhat1": [500.0] * 30})
+    s1_wbytes = pd.DataFrame({"ds": future_dates, "yhat1": [1000.0] * 30})
+    stage1 = {
+        "memory_pct": s1_mem,
+        "disk_pct": s1_disk,
+        "disk_read_bytes": s1_rbytes,
+        "disk_write_bytes": s1_wbytes,
+    }
 
     # Mock model's make_future_dataframe method
     mock_model = MagicMock()
-    fut_df = pd.DataFrame({"ds": future_dates, "y": [np.nan] * 30, "memory_pct": [np.nan] * 30, "disk_pct": [np.nan] * 30})
+    fut_df = pd.DataFrame({
+        "ds": future_dates,
+        "y": [np.nan] * 30,
+        "memory_pct": [np.nan] * 30,
+        "disk_pct": [np.nan] * 30,
+        "disk_read_bytes": [np.nan] * 30,
+        "disk_write_bytes": [np.nan] * 30,
+    })
     mock_model.make_future_dataframe.return_value = fut_df
 
     fut_res = forecaster._make_future_df(
@@ -91,3 +111,5 @@ def test_make_future_df_stage1_integration(mock_df):
     # Verify stage 1 values populated
     assert (fut_res["memory_pct"] == 65.0).all()
     assert (fut_res["disk_pct"] == 45.0).all()
+    assert (fut_res["disk_read_bytes"] == 500.0).all()
+    assert (fut_res["disk_write_bytes"] == 1000.0).all()

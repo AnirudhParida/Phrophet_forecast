@@ -90,7 +90,7 @@ def load_and_preprocess(
     cpu_raw = _read_excel(cpu_file, label="CPU")
     mem_raw = _read_excel(mem_file, label="Memory")
     disk_raw = _read_excel(disk_file, label="Disk")
-    disk_read_raw = _read_excel(disk_read_file, label="Disk Read Ops")
+    disk_read_raw = _read_excel(disk_read_file, label="Disk Read Bytes")
     disk_write_raw = _read_excel(disk_write_file, label="Disk Write Bytes")
 
     result: dict[str, pd.DataFrame] = {}
@@ -198,7 +198,7 @@ def _build_host_dataframe(
     Scaling & Parsing
     -----------------
     Percentage values (decimal proportions in [0, 1]) are multiplied by 100.
-    Unbounded values (read ops, write bytes) are parsed dynamically from strings
+    Unbounded values (read bytes, write bytes) are parsed dynamically from strings
     to pure numeric representations (e.g. converting kiB to bytes).
     """
     # --- Validate that the expected host column exists in every file ---
@@ -206,7 +206,7 @@ def _build_host_dataframe(
         ("CPU", cpu_raw),
         ("Memory", mem_raw),
         ("Disk", disk_raw),
-        ("Disk Read Ops", disk_read_raw),
+        ("Disk Read Bytes", disk_read_raw),
         ("Disk Write Bytes", disk_write_raw),
     ]:
         if col_name not in raw.columns:
@@ -225,7 +225,7 @@ def _build_host_dataframe(
     df["disk_pct"] = disk_raw[col_name].values * 100.0
 
     # Unbounded parsed metrics
-    df["disk_read_ops"] = disk_read_raw[col_name].apply(parse_metric_value)
+    df["disk_read_bytes"] = disk_read_raw[col_name].apply(parse_metric_value)
     df["disk_write_bytes"] = disk_write_raw[col_name].apply(parse_metric_value)
 
     # --- Sort by date (defensive; source files appear already sorted) ---
