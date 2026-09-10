@@ -102,8 +102,8 @@ METRIC_N_LAGS: dict[str, int] = {
     "disk_write_bytes": 14,
 }
 
-# Forecast horizon: 14 calendar days ahead
-N_FORECASTS: int = 30
+# Forecast horizon: 90 calendar days ahead
+N_FORECASTS: int = 90
 
 # Huber loss is robust to sudden operational spikes (e.g., batch jobs)
 # which would inflate MSE / MAE disproportionately.
