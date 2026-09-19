@@ -1,0 +1,11 @@
+==========================================================================================
+  MODEL COMPARISON: NeuralProphet vs Holt-Winters (HYDUPINTAPP16 | Holdout: 14 days)
+==========================================================================================
+  Metric                 NP MAE     HW MAE    NP RMSE    HW RMSE   NP WAPE   HW WAPE       Winner
+  --------------------------------------------------------------------------------------
+  cpu_pct                3.89pp     1.08pp     4.73pp     1.31pp   185.53%    51.70% Holt-Winters
+  memory_pct             2.23pp     3.17pp     2.83pp     3.72pp     2.64%     3.76% NeuralProphet
+  disk_pct              11.07pp     0.67pp    11.44pp     0.86pp    16.72%     1.00% Holt-Winters
+  disk_read_bytes        73.1KB      1.8KB     86.1KB      2.9KB   432.66%    10.36% Holt-Winters
+  disk_write_bytes       22.3KB      3.2KB     24.3KB      3.5KB   240.54%    33.94% Holt-Winters
+==========================================================================================

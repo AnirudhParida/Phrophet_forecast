@@ -1,0 +1,2 @@
+entity_id,resolution,holdout,np_mae,hw_mae,np_rmse,hw_rmse,hw_wape,winner
+MTkyLjE2OC4xMi44Ng==.1,1h,24,33.231022027686784,1.1546467628923331,42.195316492519495,1.4186103887848267,9.562750334432254,Holt-Winters

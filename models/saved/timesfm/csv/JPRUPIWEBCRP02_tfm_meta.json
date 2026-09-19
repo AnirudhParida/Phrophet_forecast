@@ -1,0 +1,9 @@
+{
+  "host": "JPRUPIWEBCRP02",
+  "model_id": "google/timesfm-3.0-pytorch",
+  "device": "cpu",
+  "context_len": 512,
+  "n_forecasts": 90,
+  "freq": "D",
+  "metadata": {}
+}

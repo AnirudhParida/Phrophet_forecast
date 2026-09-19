@@ -9,7 +9,12 @@ Changing a host name, data path, or training epoch count requires editing
 only this single file.
 """
 
+import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables (.env)
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -44,9 +49,67 @@ DISK_WRITE_FILE: Path = (
     / "Disk write bytes per second +3 (Aug 29, 2025, 05_30 - Aug 29, 2026, 05_30).xlsx"
 )
 
-# Output directories created automatically at runtime
+# ---------------------------------------------------------------------------
+# Segregated Output & Model Directory Hierarchy
+# ---------------------------------------------------------------------------
+
+OUTPUTS_DIR: Path = PROJECT_ROOT / "outputs"
 MODELS_DIR: Path = PROJECT_ROOT / "models" / "saved"
-FORECASTS_DIR: Path = PROJECT_ROOT / "outputs" / "forecasts"
+
+# Data exports: outputs/data/{csv, es}/
+DATA_EXPORT_DIR: Path = OUTPUTS_DIR / "data"
+DATA_CSV_DIR: Path = DATA_EXPORT_DIR / "csv"
+DATA_ES_DIR: Path = DATA_EXPORT_DIR / "es"
+
+# Model checkpoints: models/saved/{neuralprophet, holt_winters}/{csv, es}/
+NP_MODELS_DIR: Path = MODELS_DIR / "neuralprophet"
+NP_CSV_MODELS_DIR: Path = NP_MODELS_DIR / "csv"
+NP_ES_MODELS_DIR: Path = NP_MODELS_DIR / "es"
+
+HW_MODELS_DIR_BASE: Path = MODELS_DIR / "holt_winters"
+HW_CSV_MODELS_DIR: Path = HW_MODELS_DIR_BASE / "csv"
+HW_ES_MODELS_DIR: Path = HW_MODELS_DIR_BASE / "es"
+
+TFM_MODELS_DIR: Path = MODELS_DIR / "timesfm"
+TFM_CSV_MODELS_DIR: Path = TFM_MODELS_DIR / "csv"
+TFM_ES_MODELS_DIR: Path = TFM_MODELS_DIR / "es"
+
+CHRONOS_MODELS_DIR: Path = MODELS_DIR / "chronos"
+CHRONOS_CSV_MODELS_DIR: Path = CHRONOS_MODELS_DIR / "csv"
+CHRONOS_ES_MODELS_DIR: Path = CHRONOS_MODELS_DIR / "es"
+
+# Forecast outputs: outputs/forecasts/{neuralprophet, holt_winters, timesfm, chronos}/{csv, es}/
+FORECASTS_DIR_BASE: Path = OUTPUTS_DIR / "forecasts"
+FORECASTS_NP_CSV_DIR: Path = FORECASTS_DIR_BASE / "neuralprophet" / "csv"
+FORECASTS_NP_ES_DIR: Path = FORECASTS_DIR_BASE / "neuralprophet" / "es"
+FORECASTS_HW_CSV_DIR: Path = FORECASTS_DIR_BASE / "holt_winters" / "csv"
+FORECASTS_HW_ES_DIR: Path = FORECASTS_DIR_BASE / "holt_winters" / "es"
+FORECASTS_TFM_CSV_DIR: Path = FORECASTS_DIR_BASE / "timesfm" / "csv"
+FORECASTS_TFM_ES_DIR: Path = FORECASTS_DIR_BASE / "timesfm" / "es"
+FORECASTS_CHRONOS_CSV_DIR: Path = FORECASTS_DIR_BASE / "chronos" / "csv"
+FORECASTS_CHRONOS_ES_DIR: Path = FORECASTS_DIR_BASE / "chronos" / "es"
+
+# Evaluation reports: outputs/evaluations/{csv, es}/
+EVALUATIONS_DIR: Path = OUTPUTS_DIR / "evaluations"
+EVALUATIONS_CSV_DIR: Path = EVALUATIONS_DIR / "csv"
+EVALUATIONS_ES_DIR: Path = EVALUATIONS_DIR / "es"
+
+# Backward compatibility aliases
+FORECASTS_DIR: Path = FORECASTS_NP_CSV_DIR
+ES_MODELS_DIR: Path = NP_ES_MODELS_DIR
+ES_FORECASTS_DIR: Path = FORECASTS_NP_ES_DIR
+HW_MODELS_DIR: Path = HW_CSV_MODELS_DIR
+HW_FORECASTS_DIR: Path = FORECASTS_HW_CSV_DIR
+HW_ES_FORECASTS_DIR: Path = FORECASTS_HW_ES_DIR
+HW_CSV_FORECASTS_DIR: Path = FORECASTS_HW_CSV_DIR
+NP_CSV_FORECASTS_DIR: Path = FORECASTS_NP_CSV_DIR
+NP_ES_FORECASTS_DIR: Path = FORECASTS_NP_ES_DIR
+FORECASTS_TFM_DIR: Path = FORECASTS_TFM_CSV_DIR
+TFM_CSV_FORECASTS_DIR: Path = FORECASTS_TFM_CSV_DIR
+TFM_ES_FORECASTS_DIR: Path = FORECASTS_TFM_ES_DIR
+FORECASTS_CHRONOS_DIR: Path = FORECASTS_CHRONOS_CSV_DIR
+CHRONOS_CSV_FORECASTS_DIR: Path = FORECASTS_CHRONOS_CSV_DIR
+CHRONOS_ES_FORECASTS_DIR: Path = FORECASTS_CHRONOS_ES_DIR
 
 # ---------------------------------------------------------------------------
 # Host Registry
@@ -174,4 +237,130 @@ RANDOM_SEED: int = 42
 
 # Maximum worker processes for parallel host fitting
 MAX_WORKERS: int = 2   # one per host; increase if more hosts are added
+
+# ---------------------------------------------------------------------------
+# Elasticsearch Pipeline Configuration
+# ---------------------------------------------------------------------------
+
+ES_HOST: str = "http://192.168.12.94:9200"
+ES_USER: str = "elastic"
+ES_PASSWORD: str = "Netraa@2026"
+ES_INDEX: str = "netraa_metrics-all*"
+ES_ENTITY_ID: str = "MTkyLjE2OC4xMi44Ng==.1"
+ES_METRIC_TABLE: str = "meter_vm_cpu_total_percentage"
+ES_LOOKBACK_DAYS: int = 7
+ES_CPU_CORES: float = 6.0  # Host CPU core count to normalize multi-core percentage [0, 600] -> [0, 100]
+
+
+# Minute-level NeuralProphet Hyper-parameters (default: 1min)
+FREQ_ES: str = "1min"
+N_LAGS_ES: int = 60         # 1-hour lookback (60 minutes)
+N_FORECASTS_ES: int = 60    # 1-hour forecast horizon (60 minutes)
+EPOCHS_ES: int = 50         # Optimized epoch count for ~10,000 minute rows
+BATCH_SIZE_ES: int = 64
+LEARNING_RATE_ES: float = 1e-3
+HOLDOUT_MINUTES_ES: int = 120  # 2-hour holdout e   valuation window
+
+# Hourly-resolution NeuralProphet Hyper-parameters
+# 7 days of 1-minute data -> resampled to ~168 hourly rows
+# Note: NeuralProphet requires total_rows >= n_lags + n_forecasts
+FREQ_ES_HOURLY: str = "1h"
+N_LAGS_ES_HOURLY: int = 24        # 24-hour lookback (1 day)
+N_FORECASTS_ES_HOURLY: int = 24   # 24-hour forecast horizon (1 day)
+EPOCHS_ES_HOURLY: int = 100       # More epochs; fewer but richer rows
+BATCH_SIZE_ES_HOURLY: int = 32    # Smaller batch for ~168 rows
+HOLDOUT_HOURS_ES: int = 24        # 24-hour holdout evaluation window
+
+# Daily-resolution NeuralProphet Hyper-parameters
+# 7 days of 1-minute data -> resampled to ~7 daily rows
+FREQ_ES_DAILY: str = "D"
+N_LAGS_ES_DAILY: int = 2         # 2-day lookback
+N_FORECASTS_ES_DAILY: int = 3    # 3-day forecast horizon
+EPOCHS_ES_DAILY: int = 150
+BATCH_SIZE_ES_DAILY: int = 16
+HOLDOUT_DAYS_ES: int = 2         # 2-day holdout evaluation window
+
+# ---------------------------------------------------------------------------
+# Holt-Winters Exponential Smoothing Configuration
+# ---------------------------------------------------------------------------
+
+
+# Core Holt-Winters components
+# Trend: "add" (additive) or "mul" (multiplicative) or None
+HW_TREND: str = "add"
+# Damped trend: dampens trend projection over extended horizons
+HW_DAMPED_TREND: bool = False
+# Seasonal component: "add" (additive) or "mul" (multiplicative) or None
+HW_SEASONAL: str = "add"
+
+# Seasonality periods (m) for various sampling frequencies:
+# Daily: 7 days/week (Mon-Sun weekly cycle)
+HW_SEASONAL_PERIODS_DAILY: int = 7
+# Hourly: 24 hours/day (intraday diurnal cycle)
+HW_SEASONAL_PERIODS_HOURLY: int = 24
+# Minutely: 60 minutes/hour (hourly cycle)
+HW_SEASONAL_PERIODS_MINUTELY: int = 60
+
+# ---------------------------------------------------------------------------
+# Google TimesFM 3.0 Pretrained Model Configuration
+# ---------------------------------------------------------------------------
+
+# Official HuggingFace PyTorch checkpoint ID
+TIMESFM_MODEL_ID: str = os.getenv("TIMESFM_MODEL_ID", "google/timesfm-3.0-pytorch")
+
+# Hardware device: "auto" (selects "cuda" if GPU is available, else "cpu"), "cpu", or "cuda"
+TIMESFM_DEVICE: str = os.getenv("TIMESFM_DEVICE", "auto")
+
+# Hugging Face auth token from .env or environment
+HF_TOKEN: str | None = os.getenv("HF_TOKEN")
+
+# Inference batch size (number of time series processed simultaneously)
+TIMESFM_PER_CORE_BATCH_SIZE: int = int(os.getenv("TIMESFM_BATCH_SIZE", "16"))
+
+# Maximum lookback history window fed into TimesFM context (in time steps)
+TIMESFM_CONTEXT_LEN: int = int(os.getenv("TIMESFM_CONTEXT_LEN", "512"))
+
+# Forecast horizons (number of steps to predict ahead)
+TIMESFM_HORIZON_CSV: int = N_FORECASTS       # 90 days for daily CSV host data
+TIMESFM_HORIZON_ES: int = N_FORECASTS_ES     # 60 steps for minute-level ES data
+TIMESFM_HORIZON_ES_HOURLY: int = N_FORECASTS_ES_HOURLY  # 24 hours
+TIMESFM_HORIZON_ES_DAILY: int = N_FORECASTS_ES_DAILY    # 3 days
+
+# Evaluation holdout periods
+TIMESFM_HOLDOUT_DAYS_CSV: int = HOLDOUT_DAYS            # 30 days
+TIMESFM_HOLDOUT_MINUTES_ES: int = HOLDOUT_MINUTES_ES    # 120 minutes
+TIMESFM_HOLDOUT_HOURS_ES: int = HOLDOUT_HOURS_ES        # 24 hours
+TIMESFM_HOLDOUT_DAYS_ES: int = HOLDOUT_DAYS_ES          # 2 days
+
+# ---------------------------------------------------------------------------
+# Amazon Chronos-2 Universal Pretrained Model Configuration
+# ---------------------------------------------------------------------------
+
+# Official HuggingFace model ID for Chronos-2 (120M parameters, group attention)
+CHRONOS_MODEL_ID: str = os.getenv("CHRONOS_MODEL_ID", "amazon/chronos-2")
+
+# Hardware device: "auto" (selects "cuda" if GPU is available, else "cpu"), "cpu", or "cuda"
+CHRONOS_DEVICE: str = os.getenv("CHRONOS_DEVICE", "auto")
+
+# Inference batch size (number of time series or groups processed simultaneously)
+CHRONOS_BATCH_SIZE: int = int(os.getenv("CHRONOS_BATCH_SIZE", "64"))
+
+# Context length (maximum history sequence fed into Chronos-2)
+CHRONOS_CONTEXT_LEN: int = int(os.getenv("CHRONOS_CONTEXT_LEN", "512"))
+
+# Prediction length defaults
+CHRONOS_PREDICTION_LENGTH: int = 24
+CHRONOS_CAPACITY_HORIZON_DAYS: int = 30
+
+# Forecast horizons
+CHRONOS_HORIZON_CSV: int = N_FORECASTS                  # 90 days for daily CSV host data
+CHRONOS_HORIZON_ES: int = N_FORECASTS_ES                # 60 steps for minute-level ES data
+CHRONOS_HORIZON_ES_HOURLY: int = N_FORECASTS_ES_HOURLY  # 24 hours
+CHRONOS_HORIZON_ES_DAILY: int = N_FORECASTS_ES_DAILY    # 3 days
+
+# Evaluation holdout periods
+CHRONOS_HOLDOUT_DAYS_CSV: int = HOLDOUT_DAYS            # 30 days
+CHRONOS_HOLDOUT_MINUTES_ES: int = HOLDOUT_MINUTES_ES    # 120 minutes
+CHRONOS_HOLDOUT_HOURS_ES: int = HOLDOUT_HOURS_ES        # 24 hours
+CHRONOS_HOLDOUT_DAYS_ES: int = HOLDOUT_DAYS_ES          # 2 days
 

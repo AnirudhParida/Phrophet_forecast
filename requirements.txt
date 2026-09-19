@@ -53,8 +53,15 @@ openpyxl>=3.1.0          # Required by pandas.read_excel for .xlsx files
 scipy>=1.11.0             # Statistical utilities
 
 # --- ML Utilities ---
+statsmodels>=0.14.0       # Holt-Winters Exponential Smoothing & time series models
 scikit-learn>=1.3.0       # MAE/RMSE metrics, train-test split helpers
 joblib>=1.3.0             # Parallel model fitting via Parallel/delayed
+
+# --- Foundation Time-Series Models ---
+timesfm>=3.0.0            # Google TimesFM 3.0 pretrained PyTorch model
+chronos-forecasting>=2.0  # Amazon Chronos-2 universal forecasting model
+huggingface-hub>=0.23.0   # Hugging Face model hub client for checkpoint downloads
+safetensors>=0.4.0        # Fast, safe tensor serialization
 
 # --- Visualization ---
 matplotlib>=3.7.0         # Time series forecast charts
